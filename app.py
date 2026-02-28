@@ -1,25 +1,17 @@
 import re
 import pandas as pd
 import streamlit as st
-
-import db
 from db import init_db, insert_order, fetch_latest
 from datetime import timedelta
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="Form → Postgres", page_icon="🧾")
+st.set_page_config(page_title="Orders → Postgres", page_icon="🛒")
 
 init_db()
 
-# Cloud concept: Idempotency - safe to run multiple times
-try:
-    db.init_db()
-except Exception as e:
-    st.error("Database initialization failed.")
-    st.exception(e)
-    st.stop()
-
-
-st.title("🧾 Form → Neon Postgres")
+st.title("🛒 Orders → Neon Postgres")
+st.caption("Sumit your order. Data will be saved to Postgres and shown below.")
 
 with st.form("submission_form", clear_on_submit=True):
 
@@ -28,7 +20,7 @@ with st.form("submission_form", clear_on_submit=True):
 
     status = st.selectbox(
         "Status",
-        ["Paid", "Shipped", "Received", "Refunded", "Canceled", "N/A"]
+        ["Pending", "Processing", "Shipped", "Received", "Refunded", "Canceled", "N/A"]
     )
 
     channel = st.selectbox(
@@ -97,11 +89,72 @@ if submitted:
 
 # ---------- Display ----------
 st.divider()
-st.subheader("Latest Orders")
+st.subheader("🛒 Latest Orders")
 
 rows = fetch_latest()
 
 if rows:
-    st.dataframe(pd.DataFrame(rows))
+
+    df = pd.DataFrame(rows)
+
+    # Ensure date column is datetime
+    df["order_date"] = pd.to_datetime(df["order_date"])
+
+    # --- Aggregations ---
+    revenue_by_day = (
+        df.groupby("order_date")["total_amount_usd"]
+        .sum()
+        .reset_index()
+        .rename(columns={"total_amount_usd": "revenue"})
+    )
+
+    orders_by_day = (
+        df.groupby("order_date")["order_id"]
+        .count()
+        .reset_index()
+    )
+
+    # --- Create Side-by-Side Charts ---
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=(
+            "Revenue by day (from latest 200 orders)",
+            "Orders by day (from latest 200 orders)"
+        )
+    )
+
+    # Revenue scatter (like screenshot)
+    fig.add_trace(
+        go.Scatter(
+            x=revenue_by_day["order_date"],
+            y=revenue_by_day["revenue"],
+            mode="markers",
+            marker=dict(size=12),
+            name="Revenue"
+        ),
+        row=1, col=1
+    )
+
+    # Orders bar
+    fig.add_trace(
+        go.Bar(
+            x=orders_by_day["order_date"],
+            y=orders_by_day["order_id"],
+            name="Orders"
+        ),
+        row=1, col=2
+    )
+
+    fig.update_layout(
+        template="plotly_dark",
+        height=450,
+        showlegend=False
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- Show Table ---
+    st.dataframe(df)
+
 else:
     st.info("No data yet")
